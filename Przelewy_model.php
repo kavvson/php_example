@@ -3,35 +3,31 @@
 if (!defined('BASEPATH'))
     exit('No direct script access allowed');
 
-/**
- *
- */
-class Gratyfikant_model extends CI_Model {
+class Przelewy_model extends CI_Model
+{
 
-    private $_limit = 100;
+    private $_limit = 500;
 
     const columns = array(
-        'A' => "Numer",
-        'B' => "Miesiąc",
-        'C' => "Data wypłaty",
-        'D' => "Pracownik",
-        'E' => "Brutto duże",
-        'F' => "ZUS pracownik",
-        'G' => "ZUS pracodawca",
-        'H' => "Do wypłaty",
-        'I'=> "Obciążenie",
-        'J' => "FW"
+        'A' => "Data operacji",
+        'B' => "Data waluty",
+        'C' => "Typ transakcji",
+        'D' => "Kwota",
+        'E' => "Waluta",
+        'F' => "Saldo po transakcji",
+        'G' => "Opis transakcji",
+        'I' => ""
     );
 
     const validators = array(
+        'A' => 'date',
         'B' => 'date',
-        'C' => 'date',
-        'D' => 'string',
-        'E' => 'float',
+        'C' => 'string',
+        'D' => 'float',
+        'E' => 'string',
         'F' => 'float',
-        'G' => 'float',
-        'H' => 'float',
-        'I' => 'float',
+        'G' => 'string',
+        'I' => 'string'
     );
 
 
@@ -42,7 +38,7 @@ class Gratyfikant_model extends CI_Model {
     );
 
     protected $_required = array(
-        'D', 'E', 'F', 'G', 'H', 'I'
+        'A', 'B', 'C', 'D'
     );
     private $_sheet = array();
     private $_sheet_pracownicy = array();
@@ -97,16 +93,14 @@ class Gratyfikant_model extends CI_Model {
         }
     }
 
+
+
     public function get_sheet_data() {
         $dane = $this->_sheet;
         unset($dane[1]); // remove first col
 
-        $zus_pracownik = 0;
-        $zus_pracodawca = 0;
-        $zus_lacznie = 0;
-        $do_wyplaty = 0;
-        $obciazenie = 0;
-        $brutto = 0;
+
+        $Kwota = 0;
 
         foreach ($dane as $a => $d) {
             foreach (self::validators as $k => $v) {
@@ -114,33 +108,30 @@ class Gratyfikant_model extends CI_Model {
             }
             if (!is_null($d["D"]) && !empty($d["D"])) {
                 // $this->_sheet_pracownicy[$d["H"]]["numer"] = PHPExcel_Style_NumberFormat::toFormattedString($d["E"], PHPExcel_Style_NumberFormat::FORMAT_DATE_DDMMYYYY);
-                $this->_sheet_pracownicy[] = array(
-                    "pracownik" => $d["D"],
-                    "miesiac" => PHPExcel_Style_NumberFormat::toFormattedString($d["B"], PHPExcel_Style_NumberFormat::FORMAT_DATE_YMD),
-                    "data_wyplaty" => PHPExcel_Style_NumberFormat::toFormattedString($d["C"], PHPExcel_Style_NumberFormat::FORMAT_DATE_YMD),
-                    "zus_pracownik" => $d["F"],
-                    "zus_pracodawca" => $d["G"],
-                    "zus_lacznie" => bcadd($d["F"], $d["G"]),
-                    "do_wyplaty" => $d["H"],
-                    "obciazenie" => $d["I"],
-                    "brutto" => $d["E"],
-                    "id_prac" => $this->get_worker_id($d["D"]));
 
-                $zus_pracownik = bcadd($zus_pracownik, $d["F"]);
-                $zus_pracodawca = bcadd($zus_pracodawca, $d["G"]);
-                $zus_lacznie = bcadd($zus_lacznie, bcadd($d["F"], $d["G"]));
-                $do_wyplaty = bcadd($do_wyplaty, $d["H"]);
-                $obciazenie = bcadd($obciazenie, $d["I"]);
-                $brutto = bcadd($brutto, $d["E"]);
+                if(strlen($d['I']) == 0){
+                    $this->_sheet_pracownicy[] = array(
+                        "Data_waluty" => PHPExcel_Style_NumberFormat::toFormattedString($d["B"], PHPExcel_Style_NumberFormat::FORMAT_DATE_YMD),
+                        "Data_operacji" => PHPExcel_Style_NumberFormat::toFormattedString($d["A"], PHPExcel_Style_NumberFormat::FORMAT_DATE_YMD),
+                        "Kwota" => $d["D"],
+                        "Typ_transakcji" => str_replace("Tytuł:  ","",$d["G"])
+                    );
+
+                }else{
+                    $this->_sheet_pracownicy[] = array(
+                        "Data_waluty" => PHPExcel_Style_NumberFormat::toFormattedString($d["B"], PHPExcel_Style_NumberFormat::FORMAT_DATE_YMD),
+                        "Data_operacji" => PHPExcel_Style_NumberFormat::toFormattedString($d["A"], PHPExcel_Style_NumberFormat::FORMAT_DATE_YMD),
+                        "Kwota" => $d["D"],
+                        "Typ_transakcji" => str_replace("Tytuł:  ","",$d["I"])
+                    );
+
+                }
+
+                $Kwota = bcadd($Kwota, $d["D"]);
             }
         }
         $this->_agregacja = array(
-            "zus_pracownik" => $zus_pracownik,
-            "zus_pracodawca" => $zus_pracodawca,
-            "zus_lacznie" => $zus_lacznie,
-            "do_wyplaty" => $do_wyplaty,
-            "obciazenie" => $obciazenie,
-            "brutto" => $brutto
+            "Kwota_total" => $Kwota,
         );
         $this->dodanie_wpisu();
         return $this;
@@ -158,39 +149,25 @@ class Gratyfikant_model extends CI_Model {
     public function display_errors() {
         foreach ($this->_invalid_rows as $k => $a) {
             foreach ($a as $key => $value) {
-                throw new Exception('Pole ' . $key . '' . $k . ' ' . self::validators_errors[$value]);
+                if($key === "I"){
+
+                }else{
+                    throw new Exception('Pole ' . $key . '' . $k . ' ' . self::validators_errors[$value]);
+                }
+
             }
         }
         return $this;
     }
 
-    public function get_worker_id($getAd) {
-
-        $this->db->select('id_pracownika as id')
-                ->from('pracownicy')
-                ->like('CONCAT( imie,  \' \', nazwisko )', $getAd)
-                ->or_like('CONCAT( nazwisko,  \' \', imie )', $getAd);
-
-
-        $query = $this->db->get();
-
-
-
-        $result = $query->result_array();
-        if (isset($result[0]["id"])) {
-            return $result[0]["id"];
-        } else {
-            throw new Exception('Nie odnaleziono ' . $getAd . ' w bazie danych, proszę dodać pracownika a następnie ponownie wczytać plik');
-        }
-    }
 
     protected function sprawdz_duplikat($ms,$dw, $pr, $data) {
-        $this->db->select('id_placy as id')
-                ->from('pracownik_place')
-                ->where('miesiac', $ms)
-                ->where('data_wyplaty', $dw)
-                ->where('fk_prac', $pr)
-                ->where('data_wyplaty', $data);
+        $this->db->select('id')
+            ->from('przychody_przelewy')
+            ->where('data_operacji', $ms)
+            ->where('data_waluty', $dw)
+            ->where('typ', $pr)
+            ->where('kwota', $data);
 
 
         $query = $this->db->get();
@@ -208,23 +185,19 @@ class Gratyfikant_model extends CI_Model {
             $this->db->trans_begin();
             $cur_w = "";
             foreach ($this->_sheet_pracownicy as $i) {
-                $cur_w = $i['pracownik'];
-                $cur_m = $i['miesiac'];
-                $cur_p = $i['data_wyplaty'];
-                $do_w = $i['do_wyplaty'];
-                if ($this->sprawdz_duplikat($i["miesiac"],$i['data_wyplaty'], $i["id_prac"], $i["data_wyplaty"])) {
+                $cur_w = $i['Data_waluty'];
+                $cur_m = $i['Data_operacji'];
+                $cur_p = $i['Typ_transakcji'];
+                $do_w = $i['Kwota'];
+                if ($this->sprawdz_duplikat($cur_m,$cur_w, $cur_p, $do_w)) {
 
                     $post_data = array(
-                        'fk_prac' => $i["id_prac"],
-                        'miesiac' => $i["miesiac"],
-                        'data_wyplaty' => $i["data_wyplaty"],
-                        'brutto' => $i["brutto"],
-                        'zus_pracownik' => $i["zus_pracownik"],
-                        'zus_pracodawca' => $i["zus_pracodawca"],
-                        'do_wyplaty' => $i["do_wyplaty"],
-                        'obciazenie' => $i["obciazenie"],
+                        'data_waluty' => $i["Data_waluty"],
+                        'data_operacji' => $i["Data_operacji"],
+                        'typ' => $i["Typ_transakcji"],
+                        'kwota' => $i["Kwota"],
                     );
-                    $this->db->insert('pracownik_place', $post_data);
+                    $this->db->insert('przychody_przelewy', $post_data);
                 } else {
                     $this->db->trans_rollback();
                     throw new Exception();
@@ -237,7 +210,7 @@ class Gratyfikant_model extends CI_Model {
                 $this->db->trans_commit();
             }
         } catch (Exception $e) {
-            throw new Exception('Powielenie wpisu - ' . $cur_w . ' posiada już wpis o wypłacie za miesiąc ' . $cur_m . ' z dniem wypłaty ' . $cur_p . ' w wysokości ' . $do_w . ' proszę usunąć wpis z pliku i spróbować ponownie.');
+            throw new Exception('Powielenie wpisu - Data waluty : '.$cur_w.' Data operacji : '.$cur_m.' '.$cur_p.' Kwota : '.$do_w.'proszę usunąć wpis z pliku i spróbować ponownie.');
             $this->db->trans_rollback();
         }
     }
@@ -250,7 +223,7 @@ class Gratyfikant_model extends CI_Model {
 
         $status = FALSE;
         $message = "";
-      
+
 
         if (!empty($_FILES['inputSkan']['name'])) {
             $config['upload_path'] = './files/import';
@@ -274,10 +247,6 @@ class Gratyfikant_model extends CI_Model {
         }
         return $message;
 
-        //return $this->output
-        //                ->set_content_type('application/json')
-        //               ->set_status_header(200)
-        //                ->set_output(json_encode(array("regen" => $reponse, "response" => array("status" => $status, "message" => $message))));
     }
 
 }

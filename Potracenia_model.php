@@ -175,7 +175,7 @@ class Potracenia_model extends CI_Model
         $this->db->select("*");
 
         if ((isset($_POST['customMonth']) && $_POST['customMonth'] >= 1 && $_POST['customMonth'] <= 12) &&
-            (isset($_POST['customYear']) && $_POST['customYear'] >= 2017 && $_POST['customMonth'] <= 2050)) {
+            (isset($_POST['customYear']) && $_POST['customYear'] >= 2017 && $_POST['customYear'] <= 2050)) {
 
             $query_date = $_POST['customYear'].'-' . $_POST['customMonth'] . '-01';
 

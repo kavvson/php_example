@@ -30,6 +30,27 @@ class Wydatki_model extends CI_Model
         parent::__construct();
     }
 
+    public static function metoda_ikona($metoda)
+    {
+        $i = "";
+        switch ($metoda) {
+            case 1 :
+                $i = '<img src="' . base_url('assets/images/zloty.png') . '"  alt="gotówka">';
+                break;
+            case 2:
+                $i = '<img src="' . base_url('assets/images/transfer-money.png') . '"  alt="przelew">';
+                break;
+            case 3:
+                $i = '<img src="' . base_url('assets/images/credit-card.png') . '"  alt="karta">';
+                break;
+            case 4 :
+                $i = '<img src="' . base_url('assets/images/refund.png') . '"  alt="zwrot">';
+                break;
+        }
+
+        return $i;
+    }
+
     public function pobierz_historie($param)
     {
         $this->db->where('fk_wydatku', $param);
@@ -156,7 +177,7 @@ class Wydatki_model extends CI_Model
 
         $locked = $this->isLocked($param);
         if (!empty($locked)) {
-            $message = "Nie można edytować już opłaconych wydatków";
+            // $message = "Nie można edytować już opłaconych wydatków";
         }
 
         // Sprawdzenie płatności
@@ -380,6 +401,250 @@ class Wydatki_model extends CI_Model
         return $query->row();
     }
 
+    // @operacja : Przychod / Wydatek
+
+    public function rozlicz_wydatki($operacja)
+    {
+        if (!$this->input->is_ajax_request()) {
+            exit('No direct script access allowed');
+        }
+
+
+        $message = "";
+        $status = FALSE;
+        $data_oplacenia = null;
+        $json = json_decode($this->input->post("j"));
+        $getIds = array();
+
+        foreach ($json as $j) {
+            if (!is_numeric($j->id)) {
+                $message = "Nie przekazano parametru";
+            }
+            $getIds[] = $j->id;
+        }
+
+        if ($operacja === "Przychod") {
+            $this->db->select("przychody_platnosci.*,przychody.numer");
+            $tb = "przychody_platnosci";
+            $nazwa_kwoty = "otrzymana_kwota";
+            $fk = "fk_przychodu";
+
+            $this->db->join('przychody', 'przychody.id_przychodu = przychody_platnosci`.`fk_przychodu', 'left');
+        } else {
+            ////////////////////////////////
+            // die("Not implemented");
+            $this->db->select("platnosci.*,wydatki.dokument as numer");
+            ////////////////////////////////
+            $tb = "platnosci";
+            $nazwa_kwoty = "zaplacona_kwota";
+            $fk = "fk_wydatek";
+            $this->db->join('wydatki', 'wydatki.id_wydatku = platnosci`.`fk_wydatek', 'left');
+        }
+
+
+        $this->db->where_in($fk, $getIds);
+        $this->db->from($tb);
+        $query = $this->db->get()->result_array();
+
+        $res = array();
+        foreach ($query as $re) {
+            $org_t = $re[$nazwa_kwoty] + $re['pozostala_kwota'];
+            $res[$re[$fk]] = array(
+                'id' => $re['id_platnosci'],
+                'paid' => $re[$nazwa_kwoty],
+                'due' => $re['pozostala_kwota'],
+                'paiddata' => $re['oplacono'],
+                'status' => $re['status'],
+                'numer' => $re['numer'],
+                'org' => $org_t
+            );
+        }
+
+
+        // Compare
+        foreach ($json as $z) {
+            if (empty($res[$z->id])) {
+                $message = "Nie odnaleziono płatności";
+            }
+
+        }
+
+
+        /* new
+
+*/
+
+        if ($operacja === "Przychod") {
+            $userBudget = $this->input->post("target_price");
+            if ($userBudget == 0.00 || $userBudget < 0) {
+                $message = "Nieprawidłowa wartość przelewu";
+            }
+        }
+
+        try {
+            $this->db->trans_begin();
+
+            if ($operacja === "Przychod") {
+                $invoiceUpdate = array_map(function ($item) use (&$userBudget) {
+                    $newItem = ['id' => $item['id']];
+                    $amount = $userBudget > $item['due'] ? $item['due'] : $userBudget;
+                    $userBudget -= $amount;
+                    $statusl = $item['due'] - $amount;
+                    if ($statusl == 0) {
+                        $status = 1;
+                        $data = date("Y-m-d");
+                    } else {
+                        $status = 2;
+                        $data = null;
+                    }
+
+
+                    return [
+                        'id' => $item['id'],
+                        'newDue' => $item['due'] - $amount,
+                        'newPaid' => $item['paid'] + $amount,
+                        'oplacono' => $data,
+                        'status' => $status,
+                        'org' => $item['org'],
+                        'numer' => $item['numer']
+                    ];
+                }, $res);
+
+
+                $batch_id = array();
+                foreach ($invoiceUpdate as $upd) {
+                    $post_data = array(
+                        'oplacono' => $upd['oplacono'],
+                        'pozostala_kwota' => $upd['newDue'],
+                        $nazwa_kwoty => $upd['newPaid'],
+                        'status' => $upd['status']
+                    );
+                    $this->db->where($fk, $upd['id']);
+                    $this->db->update($tb, $post_data);
+                    $batch_id[] = $this->db->insert_id();
+                }
+
+
+                $request = count($json);
+
+            } else {
+                $result_array = array();
+                foreach ($json as $c) {
+
+                    $kwota_czesciowalubcala_do_zaplaty = $c->price;
+
+
+                    $pozostala_kwota_do_zaplaty = $res[$c->id]["due"];
+                    $zaplacona_kwota_org = $res[$c->id]["paid"];
+
+                    // debug
+
+                    if ($pozostala_kwota_do_zaplaty > 0) {
+                        // jest jeszcze kwota do zaplaty - ile ?
+                        // kwota ktora chcemy zaplacic jest wieksza od pozostalej do zaplaty
+
+                        if ($kwota_czesciowalubcala_do_zaplaty > $pozostala_kwota_do_zaplaty) {
+                            $message = "Podana kwota jest większa od kwoty pozostałej do zapłaty";
+                        } else {
+                            $nowa_pozostala_kwota = bcsub($pozostala_kwota_do_zaplaty, $kwota_czesciowalubcala_do_zaplaty, 2);
+                            $nowa_zaplacona_kwota = bcadd($zaplacona_kwota_org, $kwota_czesciowalubcala_do_zaplaty, 2); // wartość całego wydatku
+
+                            if ($nowa_pozostala_kwota > 0) {
+                                $status = 1;
+                            } else {
+                                $status = 2;
+                                $data_oplacenia = date('Y-m-d');
+                            }
+                        }
+                    } else {
+                        $message = "Wydatek jest już opłacony";
+                    }
+
+
+                    $post_data = array(
+                        $nazwa_kwoty => $nowa_zaplacona_kwota,
+                        'pozostala_kwota' => $nowa_pozostala_kwota,
+                    );
+                    if (!empty($data_oplacenia)) {
+                        $post_data['oplacono'] = $data_oplacenia;
+                    }
+                    $post_data['status'] = $status;
+
+                    $this->db->where($fk, $c->id);
+                    $this->db->update($tb, $post_data);
+                    $batch_id[] = $this->db->insert_id();
+                    $wartosc_faktury = bcadd($res[$c->id]["paid"], $res[$c->id]["due"], 2);
+                    $result_array[] = array(
+                        $nazwa_kwoty => $nowa_zaplacona_kwota,
+                        'pozostala_kwota' => $nowa_pozostala_kwota,
+                        'numer' => $res[$c->id]["numer"],
+                        'wartosc' => $wartosc_faktury
+                    );
+
+                }
+
+                $request = count($json);
+
+            }
+
+
+            if ($this->db->trans_status() === FALSE || strlen($message) > 0 || $request != count($batch_id)) {
+                $this->db->trans_rollback();
+            } else {
+                $this->db->trans_commit();
+                $message = "Rozliczono";
+                $status = 1;
+            }
+
+        } catch (Exception $e) {
+            $this->db->trans_rollback();
+            log_message('error', sprintf('%s : %s : DB transaction failed. Error no: %s, Error msg:%s, Last query: %s', __CLASS__, __FUNCTION__, $e->getCode(), $e->getMessage(), print_r($this->main_db->last_query(), TRUE)));
+        }
+        // $pdfFilePath = '';
+        if ($status == 1) {
+            $this->load->model("Generatorpdf_model", "p");
+            $this->load->helpers("Helpers");
+            if ($operacja === "Przychod") {
+                $data = array(
+                    'kwota_przelewu' => $this->input->post("target_price"),
+                    'dane' => $invoiceUpdate
+                );
+                $np = date("Y-m-d_h-i-s");
+                $html = $this->load->view('pdfy/potwierdzenie_oplacenia', $data, true);
+                $pdfFilePath = "files/koszyk/przychody/PotwierdzenieP-" . $np . "-" . $request . ".pdf";
+            } else {
+                $data = array(
+                    'kwota_przelewu' => $wartosc_faktury,
+                    'dane' => $result_array
+                );
+                $np = date("Y-m-d_h-i-s");
+                $html = $this->load->view('pdfy/potwierdzenie_wydatku', $data, true);
+                $pdfFilePath = "files/koszyk/wydatki/PotwierdzenieW-" . $np . "-" . $request . ".pdf";
+            }
+
+            //load mPDF library
+            $this->load->library('M_pdf');
+
+
+            $this->m_pdf->pdf->SetDisplayMode('fullpage');
+
+            $this->m_pdf->pdf->list_indent_first_level = 0; // 1 or 0 - whether to indent the first level of a list
+            //generate the PDF from the given html
+            $this->m_pdf->pdf->WriteHTML($html);
+
+            //download it.
+            $this->m_pdf->pdf->Output($pdfFilePath, "F");
+
+        }
+        return $this->output
+            ->set_content_type('application/json')
+            ->set_status_header(200)
+            ->set_output(json_encode(array("response" => array("status" => $status, "message" => $message, 'potwierdzenie' => $pdfFilePath))));
+
+
+    }
+
+
     public function oplacWydatek($dp)
     {
         if (!$this->input->is_ajax_request()) {
@@ -547,11 +812,11 @@ class Wydatki_model extends CI_Model
         }
 
 
-       // $limit = $this->input->get('page_limit');
+        // $limit = $this->input->get('page_limit');
 
         $this->db->select('wydatki.kwota_brutto,wydatki.dokument,wydatki.id_wydatku as id,wydatki.metoda_platnosci');
         $this->db->from('wydatki');
-        $this->db->join('wydatki_bank', 'wydatki_bank.fk_wydatku = wydatki.id_wydatku','left');
+        $this->db->join('wydatki_bank', 'wydatki_bank.fk_wydatku = wydatki.id_wydatku', 'left');
         $this->db->where('id_kupujacy', $id);
         $this->db->where('wydatki_bank.id_powiazania IS NULL', null, false);
         $this->db->like('dokument', $this->input->get("q"), 'after');
@@ -587,7 +852,7 @@ class Wydatki_model extends CI_Model
         $data = array();
         $getAd = $this->input->get('term');
         $limit = $this->input->get('page_limit');
-        $this->db->select('id_kat as id,nazwa as text')
+        $this->db->select('id_kat as id,nazwa as text,do_pojazdu')
             ->from('wydatki_kategorie')
             ->like('nazwa', $getAd);
 
@@ -599,7 +864,7 @@ class Wydatki_model extends CI_Model
         $result = $query->result_array();
         if (count($result) > 0) {
             foreach ($result as $key => $value) {
-                $data[] = array('id' => $value['id'], 'text' => $value['text']);
+                $data[] = array('id' => $value['id'], 'text' => $value['text'], 'pojazd' => $value['do_pojazdu']);
             }
         }
 
@@ -649,12 +914,17 @@ class Wydatki_model extends CI_Model
 
     public function podglad_wydatku($id)
     {
-        $this->db->select("*,wydatki_kategorie.nazwa as knazwa,datediff(`platnosci`.`termin_platnosci`,NOW()) as ddif,datediff(`platnosci`.`termin_platnosci`,platnosci.oplacono) as pdif,rejony.nazwa as rejont,CONCAT(pracownicy.imie,' ',pracownicy.nazwisko) as kupujacy,"
+        $this->db->select("*,wydatki_kategorie.nazwa as knazwa,datediff(`platnosci`.`termin_platnosci`,NOW()) as ddif,datediff(`platnosci`.`termin_platnosci`,platnosci.oplacono) as pdif,rejony.nazwa as rejont,
+        CONCAT(pracownicy.imie,' ',pracownicy.nazwisko) as kupujacy,CONCAT(z.imie,' ',z.nazwisko) as zwroc_in,"
             . "kontrahenci.nazwa as kontrah,wydatki_kategorie.nazwa as kat,platnosci.fk_rozbita as rozbita,"
             . "`platnosci`.`termin_platnosci` as termin,`platnosci`.`priorytet` as priorytet,platnosci.oplacono as oplacono,pracownicy.konto as pkonto");
         $this->db->join('wydatki', 'platnosci.fk_wydatek = wydatki.id_wydatku');
         $this->db->join('rejony', 'wydatki.id_rejonu = rejony.id_rejonu', 'left');
+
         $this->db->join('pracownicy', 'wydatki.id_kupujacy = pracownicy.id_pracownika', 'left');
+        $this->db->join('pracownicy z', 'platnosci.zwroc = z.id_pracownika', 'left');
+
+
         $this->db->join('kontrahenci', 'wydatki.kontrahent = kontrahenci.id_kontrahenta', 'left');
         $this->db->join('wydatki_kategorie', 'wydatki.kategoria = wydatki_kategorie.id_kat', 'left');
         $this->db->join('pliki', 'wydatki.skan_id = pliki.id', 'left');
@@ -663,6 +933,111 @@ class Wydatki_model extends CI_Model
         $query = $this->db->get();
 
         return $query->row();
+    }
+
+    public function pobierz_org_proforme($wyd_id)
+    {
+        $this->db->select("pliki.*");
+
+        $this->db->join('pliki', 'wydatki.prof_skan = pliki.id', 'left');
+        $this->db->where('wydatki.id_wydatku', $wyd_id);
+        $this->db->from("wydatki");
+        $query = $this->db->get();
+
+        return $query->row();
+    }
+
+    public function zalacz_pro_fv()
+    {
+        if (!$this->input->is_ajax_request()) {
+            exit('No direct script access allowed');
+        }
+
+        $message = "";
+        $status = 0;
+        $fid = NULL;
+        $this->load->helper(array('form', 'url'));
+
+
+        $this->load->library('form_validation');
+
+        if (empty($_FILES['inputSkan']['name'])) {
+            $this->form_validation->set_rules('inputSkan', 'inputSkan', 'trim|required', array(
+                'required' => 'Musisz dodać skan.',
+            ));
+        }
+
+        $this->form_validation->set_rules('fk_wydatku', 'fk_wydatek', 'trim|required|alpha_numeric', array(
+            'required' => 'Musisz podać id wydatku.',
+            'alpha_numeric' => "Nie odnaleziono wydatku"
+        ));
+
+        $fk_wydatek = $this->input->post("fk_wydatku");
+
+
+        if ($this->form_validation->run() == FALSE) {
+            $message = validation_errors();
+
+        } else {
+            try {
+
+                $this->db->trans_begin();
+                /*
+                 * Validacja skanu
+                 * Dodawanie skanu
+                 */
+
+                $this->load->model("File_handler", "pliki");
+                $this->pliki->fext("jpg|jpeg|pdf|png");
+                $hook = $this->pliki->upload_file("inputSkan", "/wydatki/" . date('Y') . "/" . $this->miesiac[date('M')] . "/" . $this->input->post('fk_wydatek'));
+
+                if (isset(json_decode($hook)->result) && json_decode($hook)->result == "error") {
+                    $message = json_decode($hook)->msg;
+                }
+                // zwrócił sieżkę - dodano
+
+                $post_data = array(
+                    'nazwa' => $_FILES["inputSkan"]['name'],
+                    'path' => $hook
+                );
+                $this->db->insert('pliki', $post_data);
+                $fid = $this->db->insert_id();
+
+                if (!is_numeric($fid)) {
+                    $message = "Nie dodano pliku - błąd";
+                }
+
+                $wydatek = array(
+                    'prof_skan' => $fid
+                );
+                $this->db->where('id_wydatku', $fk_wydatek);
+                $this->db->update('wydatki', $wydatek);
+
+
+                if ($this->db->trans_status() === FALSE || strlen($message) > 0 || empty($fid)) {
+                    $this->db->trans_rollback();
+                } else {
+                    $this->db->trans_commit();
+                    if (is_numeric($fid)) {
+                        $message = "Dodano";
+                    }
+                    $status = 1;
+                }
+            } catch (Exception $e) {
+                $this->db->trans_rollback();
+                log_message('error', sprintf('%s : %s : DB transaction failed. Error no: %s, Error msg:%s, Last query: %s', __CLASS__, __FUNCTION__, $e->getCode(), $e->getMessage(), print_r($this->main_db->last_query(), TRUE)));
+            }
+
+        }
+        $reponse = array(
+            'csrfName' => $this->security->get_csrf_token_name(),
+            'csrfHash' => $this->security->get_csrf_hash()
+        );
+
+        return $this->output
+            ->set_content_type('application/json')
+            ->set_status_header(200)
+            ->set_output(json_encode(array("regen" => $reponse, "response" => array("status" => $status, "message" => $message))));
     }
 
     public function dodaj_wydatek()
@@ -686,6 +1061,12 @@ class Wydatki_model extends CI_Model
             'required' => 'Musisz podać rejon.',
             'exact_length' => "Rejon musi mieć dokładnie 1 znak",
             'alpha_numeric' => "Rejon może być tylko liczbą"
+        ));
+
+        $this->form_validation->set_rules('inputRodzaj', 'inputRodzaj', 'trim|required|exact_length[1]|alpha_numeric', array(
+            'required' => 'Musisz podać inputRodzaj.',
+            'exact_length' => "inputRodzaj musi mieć dokładnie 1 znak",
+            'alpha_numeric' => "inputRodzaj może być tylko liczbą"
         ));
 
         $this->form_validation->set_rules('inputNaRzecz', 'rejon', 'trim|alpha_numeric', array(
@@ -745,7 +1126,11 @@ class Wydatki_model extends CI_Model
             $message = "Nieprawidłowy format daty terminu płatności rrrr-mm-dd";
         }
 
+
         $ilosclitrow = $this->custom_decimal($this->input->post('inputLitry'));
+        $inputStanLicznika = $this->input->post('inputStanLicznika');
+        $stanlicznika_nieznany = $this->input->post('stanlicznika_nieznany');
+
         // jezeli wybrano kategorie 4 = paliwo, sprawdz czy podpieto auto
         // TODO :::
         if (in_array(4, $this->input->post('inputKategoria'))) {
@@ -761,6 +1146,12 @@ class Wydatki_model extends CI_Model
                     if ($istniejewbazie["total"] == 0) {
                         $message = "Pojazd nie znajduje się w bazie danych";
                     }
+                    if (!$stanlicznika_nieznany) {
+                        if (!$inputStanLicznika || !is_numeric($inputStanLicznika)) {
+                            $message = "Proszę podać stan licznika";
+                        }
+                    }
+
                     if (!$ilosclitrow || $ilosclitrow === "0.00") {
 
                         $message = "Proszę podać ilość litrów";
@@ -781,6 +1172,12 @@ class Wydatki_model extends CI_Model
             $message = "Kategorie nie mogą się potwarzać. Liczba powtórzeń - " . count($this->sprawdz_duplikat($this->input->post('inputKategoria')));
         }
 
+        $zwroc_osobie = $this->input->post("zwr_os_sel");
+
+        if ($this->input->post("inputMetoda") === "4" && strlen($zwroc_osobie) === 0) {
+            $message = "Proszę wybrać osobę do zwrotu środków";
+        }
+
 
         // usuwanie _POST[0] z div.template
 
@@ -788,7 +1185,7 @@ class Wydatki_model extends CI_Model
         $wnetto = $this->input->post("p_cnetto");
         $wvatp = $this->input->post("p_pvat");
 
-
+        $inputRodzaj = $this->input->post("inputRodzaj");
         // array_pop($wnetto);
         $tablica = count($wnetto);
 
@@ -800,6 +1197,9 @@ class Wydatki_model extends CI_Model
             if (empty($nazwy)) {
                 $message = "Wprowadź conajmniej jedną pozycję";
             }
+            $this->load->model("Wydatki_kategorie_model");
+            $attach_car = FALSE;
+            $target_kat = array();
             foreach ($wnetto as $index => $v) {
 
                 $sw = $this->custom_decimal($wnetto[$index]);
@@ -808,6 +1208,18 @@ class Wydatki_model extends CI_Model
                     $message = "Proszę podać nazwę";
                     break;
                 }
+
+                $katcheck = $this->Wydatki_kategorie_model->get_wydatki_kategorie($nazwy[$index]);
+                if ($katcheck['do_pojazdu'] === "1" && empty($this->input->post("inputPojazd"))) {
+                    $message = "Proszę wybrać pojazd";
+                    break;
+                }
+
+                if ($katcheck['do_pojazdu'] === "1") {
+                    $attach_car = TRUE;
+                    $target_kat[] = $nazwy[$index];
+                }
+
                 if (strlen($nazwy[$index]) > 200) {
                     $message = "Nazwa może się składać max z 200 znaków";
                     break;
@@ -886,6 +1298,9 @@ class Wydatki_model extends CI_Model
                     $lacznie_brutto += $bbrutto;
                     $lacznie_netto += $net;
                     $lacznie_vat += $wvat;
+                    if (in_array($nazwy[$index], $target_kat)) {
+                        $cat_ins_ids[] = $this->db->insert_id();
+                    }
                     if ($nazwy[$index] == 4) {
 
                         $podkategoria_paliwo = $this->db->insert_id();
@@ -909,8 +1324,13 @@ class Wydatki_model extends CI_Model
                     'skan_id' => $fid,
                     'metoda_platnosci' => $this->input->post('inputMetoda'),
                     'kategoria' => $this->input->post('inputKategoria')[array_search($maxprice, $maxKat)],
-                );
 
+                );
+                if ($inputRodzaj == 1) {
+                    $post_data['pro_forma'] = 1;
+                } else {
+                    $post_data['pro_forma'] = null;
+                }
                 (!empty($this->input->post("inputKontrakt"))) ? $post_data['fk_kontrakt'] = $this->input->post("inputKontrakt") : null;
                 (!empty($this->input->post("inputNaRzecz"))) ? $post_data['fk_narzecz'] = $this->input->post("inputNaRzecz") : null;
 
@@ -973,10 +1393,14 @@ class Wydatki_model extends CI_Model
                     'pozostala_kwota' => $dozaplaty,
                     'fk_wydatek' => $id,
                     'priorytet' => $this->input->post('inputPriorytet'),
-                    'fk_rozbita' => $isRozbita
+                    'fk_rozbita' => $isRozbita,
                 );
                 if (isset($op_data)) {
                     $platnosci['oplacono'] = $op_data;
+                }
+
+                if (isset($zwroc_osobie)) {
+                    $platnosci['zwroc'] = $zwroc_osobie;
                 }
                 $this->db->insert('platnosci', $platnosci);
 
@@ -984,14 +1408,38 @@ class Wydatki_model extends CI_Model
 
 
                 if (!empty($podkategoria_paliwo)) {
+                    // kategoria paliwowa wec dodajemy  stan licznika
                     if ($pojazd) {
                         $pwydp = array(
                             'fk_wydatku' => $podkategoria_paliwo,
                             'fk_pojazd' => $this->input->post('inputPojazd'),
                             'litry' => $ilosclitrow
                         );
+
+                        $this->db->insert('pojazdy_wydatki', $pwydp);
+
+                        if (!$stanlicznika_nieznany) {
+                            $stanlicz = array(
+                                'wartosc' => $inputStanLicznika,
+                                'FK_poj' => $this->input->post('inputPojazd'),
+                                'kiedy' => $this->input->post('inputData')
+                            );
+                            $this->db->insert('pojazdy_przebiegi', $stanlicz);
+                        }
+
+
+                    }
+                } elseif ($attach_car) {
+
+                    foreach ($cat_ins_ids as $p) {
+                        $pwydp = array(
+                            'fk_wydatku' => $p,
+                            'fk_pojazd' => $this->input->post('inputPojazd'),
+                            'litry' => 0 // wszystkie pozostale kategorie nie paliwowe
+                        );
                         $this->db->insert('pojazdy_wydatki', $pwydp);
                     }
+
                 }
 
 

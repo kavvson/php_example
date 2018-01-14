@@ -106,7 +106,7 @@ class Przychody_model extends CI_Model
                 $message = "Wprowadź conajmniej jedną pozycję";
             }
 
-            if($this->existsKorekta($param)){
+            if ($this->existsKorekta($param)) {
                 $message = "Nie można dodać więcej niż jednej korekty";
             }
             foreach ($invoiceData as $index => $v) {
@@ -220,12 +220,145 @@ class Przychody_model extends CI_Model
             ->set_output(json_encode(array("regen" => $reponse, "response" => array("status" => $status, "message" => $message))));
     }
 
+
+    public function UsunFakture($id)
+    {
+        if (!$this->input->is_ajax_request()) {
+            exit('No direct script access allowed');
+        }
+        $message = "";
+        $status = 0;
+        if (!$this->is_admin) {
+            show_error("Niewystarczające uprawnienia do przeglądania przychodów", 404, 'Brak uprawnień');
+        }
+
+        try {
+
+            $this->db->trans_begin();
+
+            $przychod = $this->podglad_przychodu($id);
+            if (empty($przychod->id_przychodu)) {
+                $message = "Nie odnaleziono przychodu";
+            }
+
+            //var_dump($przychod);
+            /*
+             * Usuwanie samego wpisu + [ przychody pk::id_przychodu]	[ przychody_udzialy pk::fk_przychodu ]
+             */
+            $this->db->where('id_przychodu', $przychod->id_przychodu);
+            $this->db->delete('przychody');
+
+            $this->db->where('fk_przychodu', $przychod->id_przychodu);
+            $this->db->delete('przychody_udzialy');
+
+            /*
+             * Usuwanie korekt + korekty_dokument [	korekty :: fk_przychod ] [ korekty_dokument :: fk_link ]
+             */
+
+            $this->db->where('fk_przychod', $przychod->id_przychodu);
+            $this->db->delete('korekty');
+
+            $this->db->where('fk_link', $przychod->id_przychodu);
+            $this->db->delete('korekty_dokument');
+
+
+            /*
+             * Usuwanie płatności + historia [	przychody_platnosci :: fk_przychodu ] [ 	przychody_platnosci_historia :: dot_platnosci \id_platnosci/	]
+             */
+
+            $this->db->where('fk_przychodu', $przychod->id_przychodu);
+            $this->db->delete('przychody_platnosci');
+
+            $this->db->where('dot_platnosci', $przychod->id_platnosci);
+            $this->db->delete('przychody_platnosci_historia');
+
+
+            /*
+             * Usuwanie wpisów do faktury [	przychody_wpisy :: do_przychodu ]
+             */
+            $this->db->where('do_przychodu', $przychod->id_platnosci);
+            $this->db->delete('przychody_wpisy');
+
+            if ($this->db->trans_status() === FALSE || strlen($message) > 0) {
+                $this->db->trans_rollback();
+            } else {
+                $this->db->trans_commit();
+                $status = 1;
+                $message = "Usunięto";
+            }
+        } catch (Exception $e) {
+            $this->db->trans_rollback();
+            log_message('error', sprintf('%s : %s : DB transaction failed. Error no: %s, Error msg:%s, Last query: %s', __CLASS__, __FUNCTION__, $e->getCode(), $e->getMessage(), print_r($this->main_db->last_query(), TRUE)));
+        }
+
+        $reponse = array(
+            'csrfName' => $this->security->get_csrf_token_name(),
+            'csrfHash' => $this->security->get_csrf_hash()
+        );
+
+        return $this->output
+            ->set_content_type('application/json')
+            ->set_status_header(200)
+            ->set_output(json_encode(array("regen" => $reponse, "response" => array("status" => $status, "message" => $message))));
+    }
+
+
+    public function zmianaNrFaktury($id)
+    {
+        if (!$this->input->is_ajax_request()) {
+            exit('No direct script access allowed');
+        }
+        $message = "";
+        $status = 0;
+
+        $this->load->helper(array('form', 'url'));
+        $this->load->library('form_validation');
+        $this->form_validation->set_rules('inputFN', 'rejon', 'trim|required', array(
+            'required' => 'Musisz podać numer faktury.'
+        ));
+        if (!preg_match("/^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[1-2][0-9]|3[0-1])$/", $this->input->post('inputDatawystaw'))) {
+            //$message = "Nieprawidłowy format daty rrrr-mm-dd";
+        }
+        if ($this->form_validation->run() == FALSE) {
+            $message = validation_errors();
+        } else {
+            try {
+
+                $this->db->trans_begin();
+                $pps = array(
+                    'numer' => $this->input->post("inputFN"),
+                );
+                $this->db->where('id_przychodu', $id);
+                $this->db->update('przychody', $pps);
+
+                if ($this->db->trans_status() === FALSE || strlen($message) > 0) {
+                    $this->db->trans_rollback();
+                } else {
+                    $this->db->trans_commit();
+                    $status = 1;
+                    $message = "Zmodyfikowano";
+                }
+            } catch (Exception $e) {
+                $this->db->trans_rollback();
+                log_message('error', sprintf('%s : %s : DB transaction failed. Error no: %s, Error msg:%s, Last query: %s', __CLASS__, __FUNCTION__, $e->getCode(), $e->getMessage(), print_r($this->main_db->last_query(), TRUE)));
+            }
+        }
+        $reponse = array(
+            'csrfName' => $this->security->get_csrf_token_name(),
+            'csrfHash' => $this->security->get_csrf_hash()
+        );
+
+        return $this->output
+            ->set_content_type('application/json')
+            ->set_status_header(200)
+            ->set_output(json_encode(array("regen" => $reponse, "response" => array("status" => $status, "message" => $message))));
+    }
+
     public function edycja($param)
     {
         if (!$this->input->is_ajax_request()) {
             exit('No direct script access allowed');
         }
-
 
         $message = "";
         $status = 0;
@@ -265,6 +398,9 @@ class Przychody_model extends CI_Model
 
         $invoiceData = $this->input->post("data[InvoiceContent]");
 
+        if ($this->existsKorekta($param)) {
+            $message = "Nie można edytować faktury, która ma przypiętą korektę";
+        }
 
         if ($this->form_validation->run() == FALSE) {
             $message = validation_errors();
@@ -648,7 +784,7 @@ class Przychody_model extends CI_Model
 
 
         if (date("n") === $month && date("y") === $year) {
-            $fn = (int) $this->id_do_korekty();
+            $fn = (int)$this->id_do_korekty();
             $message = $fn . "/KOM/" . sprintf('%02d', $month) . '/' . $year;
         } else {
 
@@ -656,13 +792,13 @@ class Przychody_model extends CI_Model
             $ends = date('t', strtotime($month . '/' . $year)); //Returns days in month 6/2011
             $this->db->select("count(id) as Tmonth");
             $this->db->from("korekty_dokument");
-            $this->db->where('dodano >= ', $year . '-' . $month . '-' . $starts);
-            $this->db->where('dodano <= ', $year . '-' . $month . '-' . $ends);
+            $this->db->where('z_dnia >= ', $year . '-' . $month . '-' . $starts);
+            $this->db->where('z_dnia <= ', $year . '-' . $month . '-' . $ends);
 
             $query = $this->db->get();
 
             $nr = $query->result();
-            $message = bcadd((int) $nr[0]->Tmonth, 1) . "/KOM/" . sprintf('%02d', $month) . '/' . $year;
+            $message = bcadd((int)$nr[0]->Tmonth, 1) . "/KOM/" . sprintf('%02d', $month) . '/' . $year;
         }
 
         return json_encode(array("response" => array("status" => $year, "message" => $message)));
@@ -682,7 +818,7 @@ class Przychody_model extends CI_Model
 
 
         if (date("n") === $month && date("y") === $year) {
-            $fn = (int) $this->id_do_faktury();
+            $fn = (int)$this->id_do_faktury();
             $message = $fn . "/KOM/" . sprintf('%02d', $month) . '/' . $year;
         } else {
 
@@ -707,13 +843,13 @@ class Przychody_model extends CI_Model
         $range = $this->rangeMonth($this->input->post("termin"));
         $this->db->select("count(id) as Tmonth");
         $this->db->from("korekty_dokument");
-        $this->db->where('dodano >= ', $range['start']);
-        $this->db->where('dodano <= ', $range['end']);
+        $this->db->where('z_dnia >= ', $range['start']);
+        $this->db->where('z_dnia <= ', $range['end']);
 
         $query = $this->db->get();
 
         $nr = $query->result();
-        return (int) bcadd($nr[0]->Tmonth, 1,0);
+        return (int)bcadd($nr[0]->Tmonth, 1, 0);
     }
 
 
@@ -728,7 +864,9 @@ class Przychody_model extends CI_Model
         $query = $this->db->get();
 
         $nr = $query->result();
-        return (int) bcadd($nr[0]->Tmonth, 1,0);
+        //echo $this->db->last_query();
+        // var_dump($nr);
+        return (int)bcadd($nr[0]->Tmonth, 1, 0);
     }
 
     public function przedmioty_faktury($f)

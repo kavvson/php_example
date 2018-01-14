@@ -24,7 +24,10 @@ class Pracownicy_model extends CI_Model
         $limit = $this->input->get('page_limit');
         $this->db->select('id_pracownika as id,CONCAT(imie, " ", nazwisko) as text')
             ->from('pracownicy')
-            ->like('imie', $getAd)->or_like('nazwisko', $getAd);
+            ->where('isInactive', 0);
+        $this->db->group_start();
+        $this->db->like('imie', $getAd)->or_like('nazwisko', $getAd);
+        $this->db->group_end();
 
         $query = $this->db->limit($limit);
         $query = $this->db->get();
@@ -32,6 +35,7 @@ class Pracownicy_model extends CI_Model
         $rowcount = $query->num_rows();
 
         $result = $query->result_array();
+
         if (count($result) > 0) {
             foreach ($result as $key => $value) {
                 $data[] = array('id' => $value['id'], 'text' => $value['text']);
@@ -57,6 +61,7 @@ class Pracownicy_model extends CI_Model
                 $this->db->join('adresy b', 'pracownicy.fk_adres = b.id_adres');
             }
             $this->db->join('rejony', 'rejony.id_rejonu = pracownicy.fk_rejon', 'left');
+            $this->db->order_by('nazwisko', 'asc');
             $query = $this->db->get();
             $this->db->trans_commit();
         } catch (Exception $e) {
@@ -69,15 +74,91 @@ class Pracownicy_model extends CI_Model
         }
     }
 
-    public function dodaj_pracownika()
+    /*
+     * admin
+     * status:1 // 1 aktualnie nieaktywny 0 akt. akt
+       pracownik:2
+     */
+    public function aktywacja_pracownika()
+    {
+        if (!$this->input->is_ajax_request()) {
+            exit('No direct script access allowed');
+        }
+
+        $status = FALSE;
+        $message = "";
+
+        $datadezaktywacji = date('Y-m-d');
+        $this->load->helper(array('form', 'url'));
+        $this->load->library('form_validation');
+
+        $this->form_validation->set_rules('status', 'status', 'trim|required|exact_length[1]|alpha_numeric', array(
+            'required' => 'status podać rejon.',
+            'exact_length' => "status musi mieć dokładnie 1 znak",
+            'alpha_numeric' => "status może być tylko liczbą"
+        ));
+
+        $this->form_validation->set_rules('pracownik', 'pracownik', 'trim|required|alpha_numeric', array(
+            'required' => 'Musisz podać pracownika.',
+            'alpha_numeric' => "pracownik może być tylko liczbą"
+        ));
+        if ($this->form_validation->run() == FALSE) {
+            $message = validation_errors();
+        } else {
+            try {
+                $this->db->trans_begin();
+
+                $prac = $this->input->post("pracownik");
+                $sta = $this->input->post("status");
+
+                if ($sta) {
+                    $target_status = 0;
+                } else {
+                    $target_status = 1;
+                }
+                $post_data = array(
+                    'isInactive' => $target_status,
+                );
+                if ($target_status === 1) {
+                    $post_data['nieaktywny_od'] = $datadezaktywacji;
+                }
+                $this->db->where('id_pracownika', $prac);
+                $this->db->update('pracownicy', $post_data);
+
+                $this->db->trans_commit();
+                if ($this->db->trans_status() === FALSE) {
+                    $this->db->trans_rollback();
+                } else {
+                    $status = 1;
+                }
+            } catch (Exception $e) {
+                $this->db->trans_rollback();
+                log_message('error', sprintf('%s : %s : DB transaction failed. Error no: %s, Error msg:%s, Last query: %s', __CLASS__, __FUNCTION__, $e->getCode(), $e->getMessage(), print_r($this->main_db->last_query(), TRUE)));
+            }
+
+        }
+        $reponse = array(
+            'csrfName' => $this->security->get_csrf_token_name(),
+            'csrfHash' => $this->security->get_csrf_hash()
+        );
+
+        return $this->output
+            ->set_content_type('application/json')
+            ->set_status_header(200)
+            ->set_output(json_encode(array("regen" => $reponse, "response" => array("status" => $status, "message" => $message))));
+    }
+
+
+    public function dodaj_pracownika($rodzaj = "dodawanie", $pracownik = null, $adres = null)
     {
 
         if (!$this->input->is_ajax_request()) {
             exit('No direct script access allowed');
         }
 
-        $status = FALSE;
 
+        $status = FALSE;
+        $message = "";
         $reponse = array(
             'csrfName' => $this->security->get_csrf_token_name(),
             'csrfHash' => $this->security->get_csrf_hash()
@@ -123,6 +204,22 @@ class Pracownicy_model extends CI_Model
             )
         );
 
+        $this->form_validation->set_rules('inputStaz', 'numer konta', 'required|trim|alpha_numeric', array(
+                'alpha_numeric' => "Staż może  składać się tylko z cyfr",
+                'required' => "Musisz podać okres stażu",
+            )
+        );
+        $this->form_validation->set_rules('inputStazData', 'numer konta', 'required|trim', array(
+                'required' => "Musisz podać datę rozpoczęcia pracy pracownika",
+            )
+        );
+
+        /*
+         * inputStazData
+         */
+        if (!preg_match("/^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[1-2][0-9]|3[0-1])$/", $this->input->post('inputStazData'))) {
+            $message = "Nieprawidłowy format daty rrrr-mm-dd";
+        }
 
         if ($this->form_validation->run() == FALSE) {
             $message = validation_errors();
@@ -131,7 +228,13 @@ class Pracownicy_model extends CI_Model
             // Sprawdzamy czy są jakieś błedy w adresie
 
             $this->load->model("Adresy_model", "adresy");
-            $adres = json_decode($this->adresy->dodaj_adres());
+
+
+            if ($rodzaj === "dodawanie") {
+                $adres = json_decode($this->adresy->dodaj_adres());
+            } else {
+                $adres = json_decode($this->adresy->modyfikuj_adres($adres));
+            }
 
             // Jeżeli jest błąd w adresie pokaż
             if (!$adres->response->status) {
@@ -141,39 +244,54 @@ class Pracownicy_model extends CI_Model
 
                 // dostaliśmy ID adresu, można podpiąć go do klienta
                 $adresid = $adres->response->message;
-                if (is_numeric($adresid)) {
-                    /* Dodawanie adresu do bazy danych */
-                    try {
-                        $this->db->trans_begin();
-                        $post_data = array(
-                            'fk_rejon' => $this->input->post('inputRejon'),
-                            'fk_adres' => $adresid,
-                            'imie' => $this->input->post('inputImie'),
-                            'konto' => trim($this->input->post("inputBank")),
-                            'nazwisko' => $this->input->post('inputNazwisko'),
-                            'telefon_sluzbowy' => $this->input->post('inputTelefon'),
-                            'telefon_prywatny' => $this->input->post('inputTelefonPryw'),
-                        );
+
+                try {
+                    $this->db->trans_begin();
+                    $post_data = array(
+                        'fk_rejon' => $this->input->post('inputRejon'),
+                        'fk_adres' => $adresid,
+                        'imie' => $this->input->post('inputImie'),
+                        'konto' => trim($this->input->post("inputBank")),
+                        'nazwisko' => $this->input->post('inputNazwisko'),
+                        'telefon_sluzbowy' => $this->input->post('inputTelefon'),
+                        'telefon_prywatny' => $this->input->post('inputTelefonPryw'),
+                        'staz' => $this->input->post('inputStaz'),
+                        'staz_dodano' => $this->input->post('inputStazData'),
+                    );
+                    if ($rodzaj === "edycja") {
+                        $this->db->where('id_pracownika', $pracownik);
+                        $this->db->update('pracownicy', $post_data);
+                    } else {
                         $this->db->insert('pracownicy', $post_data);
-
                         $personID = $this->db->insert_id();
-                        $this->db->trans_commit();
-                    } catch (Exception $e) {
-                        $this->db->trans_rollback();
-                        log_message('error', sprintf('%s : %s : DB transaction failed. Error no: %s, Error msg:%s, Last query: %s', __CLASS__, __FUNCTION__, $e->getCode(), $e->getMessage(), print_r($this->main_db->last_query(), TRUE)));
                     }
-                } else {
 
-                }
+                    if ($this->db->trans_status() === FALSE || strlen($message) > 0 || !is_numeric($adresid)) {
+                        $this->db->trans_rollback();
+                    } else {
+                        $this->db->trans_commit();
+                        if ($rodzaj === "dodawanie") {
+                            if (isset($personID) && is_numeric($personID)) {
+                                $status = TRUE;
+                                $message = "Dodano pracownika";
+                            } else {
+                                $status = FALSE;
+                                $message = "Błąd podczas dodawania pracownika";
+                            }
 
-                if (isset($personID) && is_numeric($personID)) {
-                    $status = TRUE;
-                    $message = "Dodano pracownika";
-                } else {
-                    $status = FALSE;
-                    $message = "Błąd podczas dodawania pracownika";
+                        } else {
+                            $status = TRUE;
+                            $message = "Sukces";
+                        }
+                    }
+
+                } catch (Exception $e) {
+                    $this->db->trans_rollback();
+                    log_message('error', sprintf('%s : %s : DB transaction failed. Error no: %s, Error msg:%s, Last query: %s', __CLASS__, __FUNCTION__, $e->getCode(), $e->getMessage(), print_r($this->main_db->last_query(), TRUE)));
                 }
             }
+
+
         }
 
 
@@ -189,8 +307,8 @@ class Pracownicy_model extends CI_Model
     {
         try {
             $this->db->trans_begin();
-            $this->db->select('id_pracownika,CONCAT(imie," ",nazwisko) as kto');
-
+            $this->db->select('id_pracownika,CONCAT(imie," ",nazwisko) as kto,COALESCE(period_diff(date_format(DATE_ADD(w_systemie_od, INTERVAL staz MONTH), \'%Y%m\'),date_format(w_systemie_od, \'%Y%m\')),0) as months');
+            $this->db->where('isInactive', 0);
             $this->db->from('pracownicy');
 
 
@@ -208,19 +326,17 @@ class Pracownicy_model extends CI_Model
 
     public function Place_raport_caly()
     {
-        if(!empty($_POST['customMonth'])){$_POST['customMonth'] = date("n");}
-        if(!empty($_POST['customYear'])){$_POST['customYear'] = date("y");}
+
         $this->db->select("
             sum(do_wyplaty) as kwota,
             sum(zus_pracownik) as zus_pracownik,
             sum(zus_pracodawca) as zus_pracodawca,
             fk_prac
         ");
-        if ((isset($_POST['customMonth']) && $_POST['customMonth'] >= 1 && $_POST['customMonth'] <= 12) &&
-            (isset($_POST['customYear']) && $_POST['customYear'] >= 2017 && $_POST['customMonth'] <= 2050)) {
+        if ((isset($_POST['m']) && $_POST['m'] >= 1 && $_POST['m'] <= 12) &&
+            (isset($_POST['y']) && $_POST['y'] >= 2017 && $_POST['y'] <= 2050)) {
 
-            $query_date = $_POST['customYear'] . '-' . $_POST['customMonth'] . '-01';
-
+            $query_date = $_POST['y'] . '-' . $_POST['m'] . '-01';
             $this->db->group_start();
             $this->db->where('miesiac >=', date('Y-m-01', strtotime($query_date)));
             $this->db->where('miesiac <=', date('Y-m-t', strtotime($query_date)));
@@ -255,7 +371,7 @@ class Pracownicy_model extends CI_Model
             sum(zus_pracodawca) as zus_pracodawca,
         ");
         if ((isset($_POST['customMonth']) && $_POST['customMonth'] >= 1 && $_POST['customMonth'] <= 12) &&
-            (isset($_POST['customYear']) && $_POST['customYear'] >= 2017 && $_POST['customMonth'] <= 2050)) {
+            (isset($_POST['customYear']) && $_POST['customYear'] >= 2017 && $_POST['customYear'] <= 2050)) {
 
             $query_date = $_POST['customYear'] . '-' . $_POST['customMonth'] . '-01';
 
@@ -276,10 +392,10 @@ class Pracownicy_model extends CI_Model
         $this->db->select("
             sum(kwota) as kwota,
         ");
-        if ((isset($_POST['customMonth']) && $_POST['customMonth'] >= 1 && $_POST['customMonth'] <= 12) &&
-            (isset($_POST['customYear']) && $_POST['customYear'] >= 2017 && $_POST['customMonth'] <= 2050)) {
+        if ((isset($_POST['m']) && $_POST['m'] >= 1 && $_POST['m'] <= 12) &&
+            (isset($_POST['y']) && $_POST['y'] >= 2017 && $_POST['y'] <= 2050)) {
 
-            $query_date = $_POST['customYear'] . '-' . $_POST['customMonth'] . '-01';
+            $query_date = $_POST['y'] . '-' . $_POST['m'] . '-01';
 
             $this->db->group_start();
             $this->db->where('dstart >=', date('Y-m-01', strtotime($query_date)));
@@ -295,16 +411,15 @@ class Pracownicy_model extends CI_Model
 
     public function Delegacje_raport_caly()
     {
-       if(!empty($_POST['customMonth'])){$_POST['customMonth'] = date("n");}
-        if(!empty($_POST['customYear'])){$_POST['customYear'] = date("y");}
+
         $this->db->select("
             sum(kwota) as kwota,
             fk_pracownik
         ");
-        if ((isset($_POST['customMonth']) && $_POST['customMonth'] >= 1 && $_POST['customMonth'] <= 12) &&
-            (isset($_POST['customYear']) && $_POST['customYear'] >= 2017 && $_POST['customMonth'] <= 2050)) {
+        if ((isset($_POST['m']) && $_POST['m'] >= 1 && $_POST['m'] <= 12) &&
+            (isset($_POST['y']) && $_POST['y'] >= 2017 && $_POST['y'] <= 2050)) {
 
-            $query_date = $_POST['customYear'] . '-' . $_POST['customMonth'] . '-01';
+            $query_date = $_POST['y'] . '-' . $_POST['m'] . '-01';
 
             $this->db->group_start();
             $this->db->where('dstart >=', date('Y-m-01', strtotime($query_date)));
@@ -335,10 +450,10 @@ class Pracownicy_model extends CI_Model
             sum(zus_pracodawca) as zus_pracodawca,
             fk_pracownik
         ");
-        if ((isset($_POST['customMonth']) && $_POST['customMonth'] >= 1 && $_POST['customMonth'] <= 12) &&
-            (isset($_POST['customYear']) && $_POST['customYear'] >= 2017 && $_POST['customMonth'] <= 2050)) {
+        if ((isset($_POST['m']) && $_POST['m'] >= 1 && $_POST['m'] <= 12) &&
+            (isset($_POST['y']) && $_POST['y'] >= 2017 && $_POST['y'] <= 2050)) {
 
-            $query_date = $_POST['customYear'] . '-' . $_POST['customMonth'] . '-01';
+            $query_date = $_POST['y'] . '-' . $_POST['m'] . '-01';
 
             $this->db->group_start();
             $this->db->where('DATE(' . date('Y-m-01', strtotime($query_date)) . ') BETWEEN "data_rozpoczecia" AND "data_zakoczenia"', '', false);
@@ -373,7 +488,7 @@ class Pracownicy_model extends CI_Model
             sum(zus_pracodawca) as zus_pracodawca,
         ");
         if ((isset($_POST['customMonth']) && $_POST['customMonth'] >= 1 && $_POST['customMonth'] <= 12) &&
-            (isset($_POST['customYear']) && $_POST['customYear'] >= 2017 && $_POST['customMonth'] <= 2050)) {
+            (isset($_POST['customYear']) && $_POST['customYear'] >= 2017 && $_POST['customYear'] <= 2050)) {
 
             $query_date = $_POST['customYear'] . '-' . $_POST['customMonth'] . '-01';
 
@@ -396,7 +511,7 @@ class Pracownicy_model extends CI_Model
             sum(kwota) as kwota,
         ");
         if ((isset($_POST['customMonth']) && $_POST['customMonth'] >= 1 && $_POST['customMonth'] <= 12) &&
-            (isset($_POST['customYear']) && $_POST['customYear'] >= 2017 && $_POST['customMonth'] <= 2050)) {
+            (isset($_POST['customYear']) && $_POST['customYear'] >= 2017 && $_POST['customYear'] <= 2050)) {
 
             $query_date = $_POST['customYear'] . '-' . $_POST['customMonth'] . '-01';
 
@@ -414,16 +529,15 @@ class Pracownicy_model extends CI_Model
 
     public function Premie_raport_caly()
     {
-       if(!empty($_POST['customMonth'])){$_POST['customMonth'] = date("n");}
-        if(!empty($_POST['customYear'])){$_POST['customYear'] = date("y");}
+
         $this->db->select("
             sum(kwota) as kwota,
             na_rzecz
         ");
-        if ((isset($_POST['customMonth']) && $_POST['customMonth'] >= 1 && $_POST['customMonth'] <= 12) &&
-            (isset($_POST['customYear']) && $_POST['customYear'] >= 2017 && $_POST['customMonth'] <= 2050)) {
+        if ((isset($_POST['m']) && $_POST['m'] >= 1 && $_POST['m'] <= 12) &&
+            (isset($_POST['y']) && $_POST['y'] >= 2017 && $_POST['y'] <= 2050)) {
 
-            $query_date = $_POST['customYear'] . '-' . $_POST['customMonth'] . '-01';
+            $query_date = $_POST['y'] . '-' . $_POST['m'] . '-01';
 
             $this->db->group_start();
             $this->db->where('dodano >=', date('Y-m-01', strtotime($query_date)));
@@ -446,16 +560,15 @@ class Pracownicy_model extends CI_Model
 
     public function Doreki_raport_caly()
     {
-       if(!empty($_POST['customMonth'])){$_POST['customMonth'] = date("n");}
-        if(!empty($_POST['customYear'])){$_POST['customYear'] = date("y");}
+
         $this->db->select("
             sum(kwota) as kwota,
             fk_pracownik
         ");
-        if ((isset($_POST['customMonth']) && $_POST['customMonth'] >= 1 && $_POST['customMonth'] <= 12) &&
-            (isset($_POST['customYear']) && $_POST['customYear'] >= 2017 && $_POST['customMonth'] <= 2050)) {
+        if ((isset($_POST['m']) && $_POST['m'] >= 1 && $_POST['m'] <= 12) &&
+            (isset($_POST['y']) && $_POST['y'] >= 2017 && $_POST['y'] <= 2050)) {
 
-            $query_date = $_POST['customYear'] . '-' . $_POST['customMonth'] . '-01';
+            $query_date = $_POST['y'] . '-' . $_POST['m'] . '-01';
 
             $this->db->group_start();
             $this->db->where('zarejestrowano >=', date('Y-m-01', strtotime($query_date)));
@@ -473,24 +586,21 @@ class Pracownicy_model extends CI_Model
                     "kwota" => $res->kwota,
                 );
         }
+        //  echo $this->db->last_query();
         return $re;
     }
 
     public function Potracenia_raport_caly()
     {
-       if(!empty($_POST['customMonth'])){
-           $_POST['customMonth'] = date("n");
-         }
-        if(!empty($_POST['customYear'])){$_POST['customYear'] = date("y");}
 
         $this->db->select("
             sum(kwota) as kwota,
             fk_pracownik
         ");
-        if ((isset($_POST['customMonth']) && $_POST['customMonth'] >= 1 && $_POST['customMonth'] <= 12) &&
-            (isset($_POST['customYear']) && $_POST['customYear'] >= 2017 && $_POST['customMonth'] <= 2050)) {
+        if ((isset($_POST['m']) && $_POST['m'] >= 1 && $_POST['m'] <= 12) &&
+            (isset($_POST['y']) && $_POST['y'] >= 2017 && $_POST['y'] <= 2050)) {
 
-            $query_date = $_POST['customYear'] . '-' . $_POST['customMonth'] . '-01';
+            $query_date = $_POST['y'] . '-' . $_POST['m'] . '-01';
 
             $this->db->group_start();
             $this->db->where('kiedy >=', date('Y-m-01', strtotime($query_date)));
@@ -501,7 +611,7 @@ class Pracownicy_model extends CI_Model
         $this->db->group_by('fk_pracownik');
         $this->db->from("pracownik_potracenia");
         $query = $this->db->get()->result();
-        
+
         $re = array();
         foreach ($query as $res) {
 
@@ -513,18 +623,49 @@ class Pracownicy_model extends CI_Model
         return $re;
     }
 
+
+
+    public function Udzial_w_przychodzie_caly()
+    {
+        $this->db->select("przychody_udzialy.fk_pracownik,sum(round(przychody_udzialy.udzial * przychody.netto) / 100) as kwne");
+        $this->db->join("przychody", "przychody_udzialy.fk_przychodu = przychody.id_przychodu", 'left');
+
+        if ((isset($_POST['m']) && $_POST['m'] >= 1 && $_POST['m'] <= 12) &&
+            (isset($_POST['y']) && $_POST['y'] >= 2017 && $_POST['y'] <= 2050)) {
+
+            $query_date = $_POST['y'] . '-' . $_POST['m'] . '-01';
+
+            $this->db->group_start();
+            $this->db->where('przychody.sprzedano >=', date('Y-m-01', strtotime($query_date)));
+            $this->db->where('przychody.sprzedano <=', date('Y-m-t', strtotime($query_date)));
+            $this->db->group_end();
+        }
+        $this->db->group_by('przychody_udzialy.fk_pracownik');
+        $this->db->from("przychody_udzialy");
+        $query = $this->db->get()->result();
+        $re = array();
+        foreach ($query as $res) {
+            $re[$res->fk_pracownik] =
+                array(
+                    "kwne" => $res->kwne,
+                );
+        }
+
+        return $re;
+    }
+
     public function Wydatki_raport_caly()
     {
-       if(!empty($_POST['customMonth'])){$_POST['customMonth'] = date("n");}
-        if(!empty($_POST['customYear'])){$_POST['customYear'] = date("y");}
+
         $this->db->select("
             sum(kwota_brutto) as kwota,
             id_kupujacy
         ");
-        if ((isset($_POST['customMonth']) && $_POST['customMonth'] >= 1 && $_POST['customMonth'] <= 12) &&
-            (isset($_POST['customYear']) && $_POST['customYear'] >= 2017 && $_POST['customMonth'] <= 2050)) {
 
-            $query_date = $_POST['customYear'] . '-' . $_POST['customMonth'] . '-01';
+        if ((isset($_POST['m']) && $_POST['m'] >= 1 && $_POST['m'] <= 12) &&
+            (isset($_POST['y']) && $_POST['y'] >= 2017 && $_POST['y'] <= 2050)) {
+
+            $query_date = $_POST['y'] . '-' . $_POST['m'] . '-01';
 
             $this->db->group_start();
             $this->db->where('data_zakupu >=', date('Y-m-01', strtotime($query_date)));
@@ -541,49 +682,10 @@ class Pracownicy_model extends CI_Model
                     "kwota" => $res->kwota,
                 );
         }
+
         return $re;
     }
 
-    public function PobierzOplaconeCale($type)
-    {
-
-       if(!empty($_POST['customMonth'])){$_POST['customMonth'] = date("n");}
-        if(!empty($_POST['customYear'])){$_POST['customYear'] = date("y");}
-
-        if ((isset($_POST['customMonth']) && $_POST['customMonth'] >= 1 && $_POST['customMonth'] <= 12) &&
-            (isset($_POST['customYear']) && $_POST['customYear'] >= 2017 && $_POST['customMonth'] <= 2050)) {
-
-            $query_date = $_POST['customYear'] . '-' . $_POST['customMonth'] . '-01';
-
-            $this->db->select("kwota,fk_pracownik");
-
-
-            $this->db->group_start();
-            $this->db->where('data >=', date('Y-m-01', strtotime($query_date)));
-            $this->db->where('data <=', date('Y-m-t', strtotime($query_date)));
-            $this->db->group_end();
-        }
-        if ($type === 1) {
-            $this->db->where('typ', 'Gotowka');
-        } else {
-            $this->db->where('typ', 'Przelew');
-        }
-        //  $this->db->group_by('fk_pracownik');
-
-        $this->db->from("pracownik_platnosci");
-        $query = $this->db->get()->result();
-        $re = array();
-        foreach ($query as $res) {
-            $re[$res->fk_pracownik] =
-                array(
-                    "kwota" => $res->kwota,
-                );
-        }
-
-        return $re;
-
-
-    }
 
 
     public function Doreki_raport($id)
@@ -592,7 +694,7 @@ class Pracownicy_model extends CI_Model
             sum(kwota) as kwota,
         ");
         if ((isset($_POST['customMonth']) && $_POST['customMonth'] >= 1 && $_POST['customMonth'] <= 12) &&
-            (isset($_POST['customYear']) && $_POST['customYear'] >= 2017 && $_POST['customMonth'] <= 2050)) {
+            (isset($_POST['customYear']) && $_POST['customYear'] >= 2017 && $_POST['customYear'] <= 2050)) {
 
             $query_date = $_POST['customYear'] . '-' . $_POST['customMonth'] . '-01';
 
@@ -625,7 +727,7 @@ class Pracownicy_model extends CI_Model
     public function PobierzOplacone($id, $type)
     {
         if ((isset($_POST['customMonth']) && $_POST['customMonth'] >= 1 && $_POST['customMonth'] <= 12) &&
-            (isset($_POST['customYear']) && $_POST['customYear'] >= 2017 && $_POST['customMonth'] <= 2050)) {
+            (isset($_POST['customYear']) && $_POST['customYear'] >= 2017 && $_POST['customYear'] <= 2050)) {
 
             $query_date = $_POST['customYear'] . '-' . $_POST['customMonth'] . '-01';
 
@@ -649,102 +751,91 @@ class Pracownicy_model extends CI_Model
         }
     }
 
-    public function RozliczGotowke($id, $type)
+
+
+    public function raport_plac()
     {
-        $message = "";
-        $update_id = null;
 
-        if ((isset($_POST['mp']) && $_POST['mp'] >= 1 && $_POST['mp'] <= 12) &&
-            (isset($_POST['yp']) && $_POST['yp'] >= 2017 && $_POST['yp'] <= 2050)) {
+        error_reporting(0);
 
-            $this->db->select("id");
+        $place = $this->Place_raport_caly();
+        $delegacje = $this->Delegacje_raport_caly();
+
+        $premie = $this->Premie_raport_caly();
+        $doreki = $this->Doreki_raport_caly();
 
 
-            $query_date = $_POST['yp'] . '-' . $_POST['mp'] . '-01';
+        $umowy = $this->Umowy_raport_caly();
 
-            $this->db->group_start();
-            $this->db->where('data >=', date('Y-m-01', strtotime($query_date)));
-            $this->db->where('data <=', date('Y-m-t', strtotime($query_date)));
-            $this->db->group_end();
-            if ($type === 1) {
-                $this->db->where('typ', 'Gotowka');
-            } else {
-                $this->db->where('typ', 'Przelew');
-            }
+        $wydatki = $this->Wydatki_raport_caly();
 
-            $this->db->where("fk_pracownik", $id);
-            $this->db->from("pracownik_platnosci");
-            $query = $this->db->get()->result();
-            if (!empty($query[0]->id)) {
-                $update_id = $query[0]->id;
-            }
+        $potracenia = $this->Potracenia_raport_caly();
 
+        //   $oplaconeGotowka = $this->PobierzOplaconeCale(1);
+        //   $oplaconePrzelew = $this->PobierzOplaconeCale(2);
+
+        function ret($var)
+        {
+            return isset($var) ? $var : $var = "0.00";
         }
 
-        if ($type === 1) {
-            $brutto = $this->custom_decimal($this->input->post('cf_oplac_gotowka'));
-        } else {
-            $brutto = $this->custom_decimal($this->input->post('cf_oplac_przelew'));
+        $p = $this->Wszyscy_pracownicy();
+
+        foreach ($p as $prac) {
+
+            $umowykwotazus_pracownik = $umowy[$prac["id_pracownika"]]["zus_pracownik"];
+            $umowykwotazus_pracodawca = $umowy[$prac["id_pracownika"]]["zus_pracodawca"];
+            $placezus_pracownik = $place[$prac["id_pracownika"]]["zus_pracownik"];
+            $placezus_pracodawca = $place[$prac["id_pracownika"]]["zus_pracodawca"];
+
+            $totalzuspracownik = bcadd($placezus_pracownik, $umowykwotazus_pracownik, 2);
+            $totalzuspracodawca = bcadd($placezus_pracodawca, $umowykwotazus_pracodawca, 2);
+
+
+            $nareke = bcadd($nareke, $place[$prac["id_pracownika"]]["kwota"], 2);
+            $nareke = bcadd($nareke, $umowy[$prac["id_pracownika"]]["kwota"], 2);
+            $nareke = bcadd($nareke, $delegacje[$prac["id_pracownika"]]["kwota"], 2);
+            $nareke = bcadd($nareke, $premie[$prac["id_pracownika"]]["kwota"], 2);
+            $nareke = bcadd($nareke, $doreki[$prac["id_pracownika"]]["kwota"], 2);
+            $nareke = bcsub($nareke, $potracenia[$prac["id_pracownika"]]["kwota"], 2);
+
+            $kosztpracodawcy = bcadd($kosztpracodawcy, bcadd($totalzuspracodawca, $totalzuspracownik, 2), 2);
+            $kosztpracodawcy = bcadd($kosztpracodawcy, $nareke, 2);
+
+
+            $obrot = bcadd($kosztpracodawcy, $wydatki[$prac["id_pracownika"]]["kwota"], 2);
+
+            /*
+             * <td>" . ret($oplaconeGotowka[$prac["id_pracownika"]]["kwota"]) . "</td>
+                                <td>" . ret($oplaconePrzelew[$prac["id_pracownika"]]["kwota"]) . "</td>
+                                <td><button type=\"button\" data-id=\"".$prac["id_pracownika"]."\" data-toggle=\"modal\" data-target=\"#oplacGotowke\">Opłać gotówka</button>
+                                <button type=\"button\" data-id=\"".$prac["id_pracownika"]."\" data-toggle=\"modal\" data-target=\"#oplacPrzelew\">Opłać przelew</button></td>
+             */
+            echo "<tr>
+                   <td>" . $prac["kto"] . "</td>
+                   <td>" . ret($place[$prac["id_pracownika"]]["kwota"]) . "</td>
+                                <td>" . ret($umowy[$prac["id_pracownika"]]["kwota"]) . "</td>
+                                <td>" . ret($delegacje[$prac["id_pracownika"]]["kwota"]) . "</td>
+                                <td>" . ret($premie[$prac["id_pracownika"]]["kwota"]) . "</td>
+                                <td>" . ret($doreki[$prac["id_pracownika"]]["kwota"]) . "</td>
+                                <td>" . ret($nareke) . "</td>
+                                <td>" . ret($wydatki[$prac["id_pracownika"]]["kwota"]) . "</td>
+                                <td>" . ret($potracenia[$prac["id_pracownika"]]["kwota"]) . "</td>
+                                <td>" . ret($totalzuspracownik) . "</td>
+                                <td>" . ret($totalzuspracodawca) . "</td>
+                                <td>" . ret(bcadd($totalzuspracodawca, $totalzuspracownik, 2)) . "</td>
+                                <td>" . ret($kosztpracodawcy) . "</td>
+                                <td>" . ret($obrot) . "</td>
+                                </tr>";
+            $umowykwotazus_pracownik = 0;
+            $umowykwotazus_pracodawca = 0;
+            $placezus_pracownik = 0;
+            $placezus_pracodawca = 0;
+            $totalzuspracownik = 0;
+            $totalzuspracodawca = 0;
+            $nareke = 0;
+            $kosztpracodawcy = 0;
         }
-
-
-        if (!$brutto) {
-            $message = "Wartość brutto nie jest liczbą";
-        }
-        try {
-            if (strlen($message) == 0) {
-                $this->db->trans_begin();
-                $post_data = array(
-                    'data' => date($_POST['yp'] . '-' . $_POST['mp'] . '-d'),
-                    'dodal' => $this->ion_auth->user()->row()->id,
-                    'kwota' => $brutto,
-                    'fk_pracownik' => $id
-                );
-                if ($type === 1) {
-                    $post_data['typ'] = "Gotowka";
-                } else {
-                    $post_data['typ'] = "Przelew";
-                }
-                if (is_numeric($update_id)) {
-                    //update
-                    $this->db->where('id', $update_id);
-                    $this->db->update('pracownik_platnosci', $post_data);
-                    $idw = 1;
-                } else {
-                    $this->db->insert('pracownik_platnosci', $post_data);
-                    $idw = $this->db->insert_id();
-                }
-
-
-            }
-
-
-            if ($this->db->trans_status() === FALSE || strlen($message) > 0) {
-                $this->db->trans_rollback();
-            } else {
-                $this->db->trans_commit();
-                if (isset($idw) && is_numeric($idw)) {
-                    $status = TRUE;
-                    $message = "Dodano";
-                }
-            }
-
-        } catch (Exception $e) {
-            $this->db->trans_rollback();
-            log_message('error', sprintf('%s : %s : DB transaction failed. Error no: %s, Error msg:%s, Last query: %s', __CLASS__, __FUNCTION__, $e->getCode(), $e->getMessage(), print_r($this->main_db->last_query(), TRUE)));
-        }
-
-        $reponse = array(
-            'csrfName' => $this->security->get_csrf_token_name(),
-            'csrfHash' => $this->security->get_csrf_hash()
-        );
-
-        return $this->output
-            ->set_content_type('application/json')
-            ->set_status_header(200)
-            ->set_output(json_encode(array("regen" => $reponse, "response" => array("status" => $status, "message" => $message))));
-
-
     }
 
 }

@@ -11,18 +11,21 @@
  *
  * @author Kavvson
  */
-class Generatorpdf_model extends CI_Model {
+class Generatorpdf_model extends CI_Model
+{
 
     // Statusy
     const do_zaplaty = 1;
     const oplacony = 2;
     const czesciowo_oplacony = 3;
 
-    public function __construct() {
+    public function __construct()
+    {
         parent::__construct();
     }
 
-    public function pobierz_delegacje($id) {
+    public function pobierz_delegacje($id)
+    {
         $this->db->select("pracownik_delegacje.*,CONCAT(pracownicy.imie,' ',pracownicy.nazwisko) as kupujacy,pracownicy.konto as pkonto,b.*");
         $this->db->join('pracownicy', 'pracownik_delegacje.fk_pracownik = pracownicy.id_pracownika', 'left');
         $this->db->join('adresy b', 'pracownicy.fk_adres = b.id_adres');
@@ -34,7 +37,8 @@ class Generatorpdf_model extends CI_Model {
         return $query[0];
     }
 
-    public function pobierz_wyplaty($id) {
+    public function pobierz_wyplaty($id)
+    {
         $this->db->select("pracownik_doreki.*,CONCAT(pracownicy.imie,' ',pracownicy.nazwisko) as kupujacy,pracownicy.konto as pkonto,b.*");
         $this->db->join('pracownicy', 'pracownik_doreki.fk_pracownik = pracownicy.id_pracownika', 'left');
         $this->db->join('adresy b', 'pracownicy.fk_adres = b.id_adres');
@@ -47,7 +51,8 @@ class Generatorpdf_model extends CI_Model {
         return $query[0];
     }
 
-    public function pobierz_zaliczke($id) {
+    public function pobierz_zaliczke($id)
+    {
         $this->db->select("pracownik_bank.typ_transakcji,abs(pracownik_bank.kwota) as kwota,pracownik_bank.data_operacji,pracownik_bank.opis,CONCAT(pracownicy.imie,' ',pracownicy.nazwisko) as kupujacy,pracownicy.konto as pkonto,b.*");
         $this->db->join('pracownicy', 'pracownik_bank.fk_pracownik = pracownicy.id_pracownika', 'left');
         $this->db->join('adresy b', 'pracownicy.fk_adres = b.id_adres');
@@ -58,6 +63,28 @@ class Generatorpdf_model extends CI_Model {
         $query = $this->db->get()->result_array();
 
         return $query[0];
+    }
+
+    public function pobierz_wyplaty_pracownikow($month, $rok)
+    {
+
+        $dateclause = '';
+
+
+        $query_date = $rok . '-' . $month . '-01';
+
+
+        $dateclause .= 'data >= "' . date('Y-m-01', strtotime($query_date)) . '" AND ';
+        $dateclause .= 'data <= "' . date('Y-m-t', strtotime($query_date)) . '"';
+
+
+        $query = $this->db->query("SELECT pracownik_platnosci.*, CONCAT(pracownicy.imie,' ',pracownicy.nazwisko) as pracownik,pracownicy.konto FROM `pracownik_platnosci`
+LEFT JOIN pracownicy ON pracownik_platnosci.fk_pracownik = pracownicy.id_pracownika
+WHERE " . $dateclause);
+
+        $query = $query->result_array();
+
+        return $query;
     }
 
 }

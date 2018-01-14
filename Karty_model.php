@@ -485,6 +485,7 @@ class Karty_model extends CI_Model
 
     public function dodanie_wpisu()
     {
+        die("fukcja wylaczona");
         try {
             $this->db->trans_begin();
             foreach ($this->_sheet_pracownicy as $i) {
@@ -572,6 +573,7 @@ class Karty_model extends CI_Model
 
     public function Dodaj()
     {
+        die("fukcja wylaczona");
         if (!$this->input->is_ajax_request()) {
             exit('No direct script access allowed');
         }
@@ -645,7 +647,7 @@ class Karty_model extends CI_Model
             );
             $this->db->where('`fk_pracownik`', $this->input->post('s_pracownik'));
         }
-
+        $this->db->where('`typ_transakcji`','Zaliczka');
 
         $this->zakres("default");
 
@@ -755,7 +757,7 @@ class Karty_model extends CI_Model
             $q = "wydatki.data_zakupu";
         }
         if ((isset($_POST['customMonth']) && $_POST['customMonth'] >= 1 && $_POST['customMonth'] <= 12) &&
-            (isset($_POST['customYear']) && $_POST['customYear'] >= 2017 && $_POST['customMonth'] <= 2050)) {
+            (isset($_POST['customYear']) && $_POST['customYear'] >= 2017 && $_POST['customYear'] <= 2050)) {
 
             $query_date = $_POST['customYear'] . '-' . $_POST['customMonth'] . '-01';
 
@@ -971,6 +973,7 @@ IF(SUM(wydatki.kwota_brutto) IS NULL,abs(pracownik_bank.kwota),IF(abs(pracownik_
      */
     public function OdepnijZKarty()
     {
+        die("fukcja wylaczona");
         $message = "";
         try {
             $this->db->trans_begin();

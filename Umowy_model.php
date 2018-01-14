@@ -35,6 +35,7 @@ class Umowy_model extends CI_Model
         'K' => "Data zakończenia",
         'L' => "FW");
     const validators = array(
+        'C' => 'date',
         'J' => 'date',
         'K' => 'date',
         'E' => 'float',
@@ -48,7 +49,7 @@ class Umowy_model extends CI_Model
         'date' => "Wartość nie jest datą"
     );
     protected $_required = array(
-        'B', 'D', 'E', 'F', 'G', 'H', 'I', 'J'
+        'B', 'C','D', 'E', 'F', 'G', 'H', 'I', 'J'
     );
     private $_sheet = array();
     private $_sheet_pracownicy = array();
@@ -151,6 +152,7 @@ class Umowy_model extends CI_Model
                         "pracownik" => $d["B"],
                         "data_zakonczenia" => PHPExcel_Style_NumberFormat::toFormattedString($d["K"], PHPExcel_Style_NumberFormat::FORMAT_DATE_YMD),
                         "data_rozpoczecia" => PHPExcel_Style_NumberFormat::toFormattedString($d["J"], PHPExcel_Style_NumberFormat::FORMAT_DATE_YMD),
+                        "data_rachunku" => PHPExcel_Style_NumberFormat::toFormattedString($d["C"], PHPExcel_Style_NumberFormat::FORMAT_DATE_YMD),
                         "zus_pracownik" => (!empty($d["G"])) ? $d["G"] : 0.00,
                         "zus_pracodawca" => (!empty($d["H"])) ? $d["H"] : 0.00,
                         "zus_lacznie" => bcadd((!empty($d["G"])) ? $d["G"] : 0.00, (!empty($d["H"])) ? $d["H"] : 0.00),
@@ -215,16 +217,17 @@ class Umowy_model extends CI_Model
         if (isset($result[0]["id"])) {
             return $result[0]["id"];
         } else {
-            //throw new Exception('Nie odnaleziono ' . $getAd . ' w bazie danych, proszę dodać pracownika a następnie ponownie wczytać plik');
+           throw new Exception('Nie odnaleziono ' . $getAd . ' w bazie danych, proszę dodać pracownika a następnie ponownie wczytać plik');
         }
     }
 
-    protected function sprawdz_duplikat($ms, $pr, $data, $u)
+    protected function sprawdz_duplikat($ms, $pr, $data, $datarach,$u)
     {
         $this->db->select('id_umowy as id')
             ->from('pracownik_umowy')
             ->where('data_zakonczenia', $ms)
             ->where('data_rozpoczecia', $data)
+            ->where('data_rachunku', $datarach)
             ->where('fk_pracownik', $pr)->where('umowa', $u);
 
 
@@ -249,7 +252,7 @@ class Umowy_model extends CI_Model
                 $cur_r = $i['data_rozpoczecia'];
                 $do_w = $i['brutto'];
                 $u = $i['umowa'];
-                if ($this->sprawdz_duplikat($i["data_zakonczenia"], $i["id_prac"], $i["data_rozpoczecia"], $i["umowa"])) {
+                if ($this->sprawdz_duplikat($i["data_zakonczenia"], $i["id_prac"], $i["data_rozpoczecia"],$i["data_rachunku"], $i["umowa"])) {
 
                     $post_data = array(
                         'fk_pracownik' => $i["id_prac"],
@@ -259,6 +262,7 @@ class Umowy_model extends CI_Model
                         'do_wyplaty' => $i["do_wyplaty"],
                         "data_zakonczenia" => $i["data_zakonczenia"],
                         "data_rozpoczecia" => $i["data_rozpoczecia"],
+                        "data_rachunku" => $i["data_rachunku"],
                         "umowa" => $i["umowa"]
                     );
 
@@ -333,13 +337,13 @@ class Umowy_model extends CI_Model
         }
 
         if ((isset($_POST['customMonth']) && $_POST['customMonth'] >= 1 && $_POST['customMonth'] <= 12) &&
-            (isset($_POST['customYear']) && $_POST['customYear'] >= 2017 && $_POST['customMonth'] <= 2050)) {
+            (isset($_POST['customYear']) && $_POST['customYear'] >= 2017 && $_POST['customYear'] <= 2050)) {
 
             $query_date = $_POST['customYear'].'-' . $_POST['customMonth'] . '-01';
 
             $this->db->group_start();
-            $this->db->where('data_rozpoczecia <=', date('Y-m-01', strtotime($query_date)));
-           // $this->db->where($q . ' <=', date('Y-m-t', strtotime($query_date)));
+            $this->db->where('data_rachunku >=', date('Y-m-01', strtotime($query_date)));
+            $this->db->where('data_rachunku <=', date('Y-m-t', strtotime($query_date)));
             $this->db->group_end();
         }
 
@@ -375,7 +379,7 @@ class Umowy_model extends CI_Model
 
 
         $query = $this->db->get();
-        //echo $this->db->last_query();
+        ///echo $this->db->last_query();
         return $query->result();
     }
 

@@ -50,16 +50,37 @@ class Customers_model extends CI_Model {
 
     private function _get_datatables_query() {
 
-        $this->db->select("*,datediff(`platnosci`.`termin_platnosci`,NOW()) as ddif,rejony.nazwa as rejont,CONCAT(pracownicy.imie,' ',pracownicy.nazwisko) as kupujacy,"
-                . "kontrahenci.nazwa as kontrah,wydatki_kategorie.nazwa as kat,platnosci.fk_rozbita as rozbita,"
-                . "`platnosci`.`termin_platnosci` as termin,`platnosci`.`priorytet` as priorytet");
-        $this->db->join('wydatki', 'platnosci.fk_wydatek = wydatki.id_wydatku');
-        $this->db->join('rejony', 'wydatki.id_rejonu = rejony.id_rejonu', 'left');
-        $this->db->join('pracownicy', 'wydatki.id_kupujacy = pracownicy.id_pracownika', 'left');
-        $this->db->join('kontrahenci', 'wydatki.kontrahent = kontrahenci.id_kontrahenta', 'left');
-        $this->db->join('wydatki_kategorie', 'wydatki.kategoria = wydatki_kategorie.id_kat', 'left');
+
 
         //add custom filter here s_narzecz s_kontrakt
+
+
+        if ($this->input->post('pojazd')) {
+            $this->db->select("*,datediff(`platnosci`.`termin_platnosci`,NOW()) as ddif,rejony.nazwa as rejont,CONCAT(pracownicy.imie,' ',pracownicy.nazwisko) as kupujacy,"
+                . "kontrahenci.nazwa as kontrah,wydatki_kategorie.nazwa as kat,platnosci.fk_rozbita as rozbita,"
+                . "`platnosci`.`termin_platnosci` as termin,`platnosci`.`priorytet` as priorytet");
+            $this->table = 'pojazdy_wydatki';
+            $this->order = null;
+            $this->db->join('wydatki_wpisy', 'pojazdy_wydatki.fk_wydatku = wydatki_wpisy.id_item', 'left');
+            $this->db->join('wydatki', 'wydatki_wpisy.do_wydatku = wydatki.id_wydatku', 'left');
+            $this->db->join('platnosci', 'wydatki.id_wydatku = platnosci.id_platnosci', 'left');
+            $this->db->join('wydatki_kategorie', 'wydatki.kategoria = wydatki_kategorie.id_kat', 'left');
+            $this->db->join('rejony', 'wydatki.id_rejonu = rejony.id_rejonu', 'left');
+            $this->db->join('pracownicy', 'wydatki.id_kupujacy = pracownicy.id_pracownika', 'left');
+            $this->db->join('kontrahenci', 'wydatki.kontrahent = kontrahenci.id_kontrahenta', 'left');
+            $this->db->where('pojazdy_wydatki.fk_pojazd', $this->input->post('pojazd'));
+
+        }else{
+            $this->db->select("*,datediff(`platnosci`.`termin_platnosci`,NOW()) as ddif,rejony.nazwa as rejont,CONCAT(pracownicy.imie,' ',pracownicy.nazwisko) as kupujacy,"
+                . "kontrahenci.nazwa as kontrah,wydatki_kategorie.nazwa as kat,platnosci.fk_rozbita as rozbita,"
+                . "`platnosci`.`termin_platnosci` as termin,`platnosci`.`priorytet` as priorytet");
+            $this->db->join('wydatki', 'platnosci.fk_wydatek = wydatki.id_wydatku');
+            $this->db->join('rejony', 'wydatki.id_rejonu = rejony.id_rejonu', 'left');
+            $this->db->join('pracownicy', 'wydatki.id_kupujacy = pracownicy.id_pracownika', 'left');
+            $this->db->join('kontrahenci', 'wydatki.kontrahent = kontrahenci.id_kontrahenta', 'left');
+            $this->db->join('wydatki_kategorie', 'wydatki.kategoria = wydatki_kategorie.id_kat', 'left');
+        }
+
         if ($this->input->post('s_rejon')) {
             $this->db->where('`rejony`.`id_rejonu`', $this->input->post('s_rejon'));
         }
@@ -76,6 +97,7 @@ class Customers_model extends CI_Model {
         if ($this->input->post('kupiec')) {
             $this->db->where('wydatki.id_kupujacy', $this->input->post('kupiec'));
         }
+
         if ($this->input->post('s_kategoria')) {
             $this->db->where('wydatki.kategoria', $this->input->post('s_kategoria'));
         }
@@ -84,6 +106,15 @@ class Customers_model extends CI_Model {
         }
         if ($this->input->post('pusteSkany')) {
             $this->db->where('skan_id IS NULL', null, false);
+        }
+        if ($this->input->post('s_rodzaj_f')) {
+            $this->db->where('`wydatki`.`pro_forma`', 1);
+        }
+        if ($this->input->post('s_profbezskanu')) {
+            $this->db->group_start();
+            $this->db->where('`wydatki`.`pro_forma`', 1);
+            $this->db->where('prof_skan IS NULL', null, false);
+            $this->db->group_end();
         }
         // zakres dat
 
@@ -111,6 +142,11 @@ class Customers_model extends CI_Model {
                     case "3" :
                         $this->db->or_group_start();
                         $this->db->where('`wydatki`.`metoda_platnosci`', '3');
+                        $this->db->group_end();
+                        break;
+                    case "4" :
+                        $this->db->or_group_start();
+                        $this->db->where('`wydatki`.`metoda_platnosci`', '4');
                         $this->db->group_end();
                         break;
                 }
@@ -143,7 +179,7 @@ class Customers_model extends CI_Model {
             $this->db->group_end();
         }
         if ((isset($_POST['customMonth']) && $_POST['customMonth'] >= 1 && $_POST['customMonth'] <= 12) &&
-            (isset($_POST['customYear']) && $_POST['customYear'] >= 2017 && $_POST['customMonth'] <= 2050)) {
+            (isset($_POST['customYear']) && $_POST['customYear'] >= 2017 && $_POST['customYear'] <= 2050)) {
 
             $query_date = $_POST['customYear'].'-' . $_POST['customMonth'] . '-01';
 
@@ -264,6 +300,7 @@ class Customers_model extends CI_Model {
 
 
         $query = $this->db->get();
+        //echo $this->db->last_query();
         return $query->result();
     }
 

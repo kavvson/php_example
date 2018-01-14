@@ -20,7 +20,7 @@ class Przychody_dt_model extends CI_Model {
         "wartosc",
         "netto",
         "vat_lacznie",
-        "numer",
+        "id_przychodu",
         null,
         "kontrah",
         null,
@@ -81,7 +81,7 @@ class Przychody_dt_model extends CI_Model {
 
         // zakres dat
         if ((isset($_POST['customMonth']) && $_POST['customMonth'] >= 1 && $_POST['customMonth'] <= 12) &&
-            (isset($_POST['customYear']) && $_POST['customYear'] >= 2017 && $_POST['customMonth'] <= 2050)) {
+            (isset($_POST['customYear']) && $_POST['customYear'] >= 2017 && $_POST['customYear'] <= 2050)) {
 
             $query_date = $_POST['customYear'].'-' . $_POST['customMonth'] . '-01';
 
@@ -142,9 +142,17 @@ class Przychody_dt_model extends CI_Model {
                 $this->db->where('przychody.z_dnia <= ', $range['end']);
                 $this->db->group_end();
                 break;
-            case "this_year" :
+            case "last_year" :
                 $this->db->group_start();
-                $this->db->where('przychody.z_dnia >= ', date('l', strtotime(date('Y-01-01'))));
+                $this->db->where('przychody.z_dnia >= ', date("d-m-y",strtotime("last year January 1st")));
+                $this->db->where('przychody.z_dnia <= ',date("d-m-y",strtotime("last year December 31st")));
+                $this->db->group_end();
+                break;
+            case "this_year" :
+                $yearEnd = date('Y-m-d', strtotime('last day of december'));
+                $this->db->group_start();
+                $this->db->where('przychody.z_dnia >= ', date('Y-m-d', strtotime('first day of january')));
+                $this->db->where('przychody.z_dnia <= ', $yearEnd);
                 $this->db->group_end();
                 break;
             case "last_week" :
@@ -233,7 +241,7 @@ class Przychody_dt_model extends CI_Model {
         $query = $this->db->get();
 
        // var_dump($query->result());
-      //  echo $this->db->last_query();
+     // echo $this->db->last_query();
         return $query->result();
     }
 
